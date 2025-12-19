@@ -1,0 +1,11 @@
+# AI-Tester
+
+AI-Tester is an automated testing framework for evaluating AI/LLM agents against structured question sets.
+
+The project is designed to:
+- Run batch tests against AI APIs
+- Categorize questions (e.g. objective vs subjective)
+- Capture, store, and compare model responses
+- Support iterative evaluation during development (non-production)
+
+This repository is currently focused on **local development and experimentation**.
