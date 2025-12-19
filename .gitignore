@@ -3,3 +3,6 @@
 
 # ignore all env
 *.env
+
+# ignore Python virtual environment
+.venv
