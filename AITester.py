@@ -3,25 +3,38 @@ import json
 import time
 import requests
 import threading
+from dotenv import load_dotenv
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# Load environment variables from .env file
+load_dotenv()
 
 # CONFIG
 # ---- API ----
 API_KEY = os.getenv("PERSONAL_API_KEY")
 API_BASE_URL = os.getenv("PERSONAL_API_BASE_URL")
-TIMEOUT = os.getenv("REQUEST_TIMEOUT")
-RETRIES = os.getenv("MAX_RETRIES")
+TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", 60))   # Request timeout in seconds (default: 60)
+RETRIES = int(os.getenv("MAX_RETRIES", 2))          # Maximum number of retry attempts (default: 2)
 
-# ---- Threading ----
-MAX_WORKERS = 3
-SAVE_EVERY = 1           # save after every completed request
-OUT_OBJECTIVE = "dify_results_objective.json"
-OUT_SUBJECTIVE = "dify_results_subjective.json"
+# ---- Threading & Output Configuration ----
+MAX_WORKERS = 3                                      # Maximum number of parallel worker threads
+SAVE_EVERY = 1                                       # Save results after every N completed requests
+OUT_OBJECTIVE = "saved_results/dify_results_objective.json"   # Output file for objective test results
+OUT_SUBJECTIVE = "saved_results/dify_results_subjective.json" # Output file for subjective test results
 
 
 def save_json(path: str, data) -> None:
+    """
+    Saves data to a JSON file with atomic write operation.
+    
+    Uses temporary file + replace to ensure data integrity in case of interruptions.
+    
+    Args:
+        path (str): Path to the output JSON file
+        data: Data to be saved (must be JSON serializable)
+    """
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
@@ -29,11 +42,31 @@ def save_json(path: str, data) -> None:
 
 
 def load_json(path: str):
+    """
+    Loads data from a JSON file.
+    
+    Args:
+        path (str): Path to the input JSON file
+        
+    Returns:
+        Parsed JSON data
+    """
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
 def split_objective_subjective(records):
+    """
+    Splits test records into objective and subjective categories.
+    
+    Objective questions are identified by having "hard_rules" in their evaluation tags.
+    
+    Args:
+        records (list): List of test records to split
+        
+    Returns:
+        tuple: (objective_questions, subjective_questions)
+    """
     obj, sub = [], []
     for r in records:
         (obj if "hard_rules" in r.get("eval", []) else sub).append(r)
@@ -41,9 +74,21 @@ def split_objective_subjective(records):
 
 
 def make_session(retries=RETRIES, verify=True) -> requests.Session:
+    """
+    Creates a requests Session with retry configuration.
+    
+    Configures session with retry logic for transient errors (429, 500-504).
+    
+    Args:
+        retries (int): Maximum number of retry attempts
+        verify (bool): Whether to verify SSL certificates
+        
+    Returns:
+        requests.Session: Configured session object
+    """
     s = requests.Session()
     retry = Retry(
-        total=RETRIES,
+        total=retries,
         backoff_factor=1,
         status_forcelist=[429, 500, 502, 503, 504],
         allowed_methods=["POST"],
@@ -58,12 +103,35 @@ _thread_local = threading.local()
 
 
 def get_session() -> requests.Session:
+    """
+    Gets a thread-local requests Session.
+    
+    Ensures each thread has its own session instance to avoid thread-safety issues.
+    Creates a new session if one doesn't exist for the current thread.
+    
+    Returns:
+        requests.Session: Thread-local configured session
+    """
     if not hasattr(_thread_local, "session"):
         _thread_local.session = make_session()
     return _thread_local.session
 
 
 def dify_chat(query: str, user: str, inputs=None) -> dict:
+    """
+    Sends a chat query to Dify API and returns the response.
+    
+    Args:
+        query (str): The user's query to send to the AI model
+        user (str): Unique identifier for the user (used for conversation tracking)
+        inputs (dict, optional): Additional input parameters for the model
+        
+    Returns:
+        dict: Response containing success status, answer, time taken, and conversation ID
+        
+    Raises:
+        requests.exceptions.RequestException: If the API request fails
+    """
     s = get_session()
     url = f"{API_BASE_URL}/chat-messages"
     headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
@@ -79,6 +147,19 @@ def dify_chat(query: str, user: str, inputs=None) -> dict:
 
 
 def worker(i: int, qobj: dict, user_prefix: str) -> dict:
+    """
+    Worker function for processing individual test questions.
+    
+    Handles sending queries to Dify API with retry logic for specific network errors.
+    
+    Args:
+        i (int): Worker index (used for user ID generation)
+        qobj (dict): Question object containing the test query
+        user_prefix (str): Prefix for generating unique user IDs
+        
+    Returns:
+        dict: Result containing question, ID, and API response
+    """
     q = qobj["question"]
     user = f"{user_prefix}-{i:03d}"
     try:
@@ -95,6 +176,21 @@ def worker(i: int, qobj: dict, user_prefix: str) -> dict:
 
 
 def run_parallel_suite(questions, user_prefix: str, out_path: str, max_workers: int = MAX_WORKERS):
+    """
+    Runs a parallel suite of test questions using ThreadPoolExecutor.
+    
+    Processes questions concurrently, handles keyboard interrupts gracefully,
+    and saves results incrementally.
+    
+    Args:
+        questions (list): List of question objects to test
+        user_prefix (str): Prefix for generating unique user IDs
+        out_path (str): Path to save the results JSON file
+        max_workers (int): Maximum number of parallel worker threads
+        
+    Returns:
+        list: All test results
+    """
     results = []
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
         futures = [ex.submit(worker, i, q, user_prefix) for i, q in enumerate(questions)]
