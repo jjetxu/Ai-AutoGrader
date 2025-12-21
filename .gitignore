@@ -7,4 +7,4 @@
 # ignore Python virtual environment
 .venv
 
-.saved_results
+saved_results/
