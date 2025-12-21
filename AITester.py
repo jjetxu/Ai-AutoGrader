@@ -13,13 +13,13 @@ load_dotenv()
 
 # CONFIG
 # ---- API ----
-API_KEY = os.getenv("PERSONAL_API_KEY")
-API_BASE_URL = os.getenv("PERSONAL_API_BASE_URL")
+API_KEY = os.getenv("API_KEY")
+API_BASE_URL = os.getenv("API_BASE_URL")
 TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", 60))   # Request timeout in seconds (default: 60)
 RETRIES = int(os.getenv("MAX_RETRIES", 2))          # Maximum number of retry attempts (default: 2)
 
 # ---- Threading & Output Configuration ----
-MAX_WORKERS = 3                                      # Maximum number of parallel worker threads
+MAX_WORKERS = 1                                      # Maximum number of parallel worker threads
 SAVE_EVERY = 1                                       # Save results after every N completed requests
 OUT_OBJECTIVE = "saved_results/dify_results_objective.json"   # Output file for objective test results
 OUT_SUBJECTIVE = "saved_results/dify_results_subjective.json" # Output file for subjective test results
@@ -71,6 +71,22 @@ def split_objective_subjective(records):
     for r in records:
         (obj if "hard_rules" in r.get("eval", []) else sub).append(r)
     return obj, sub
+
+
+def test_api_connection():
+    """Test if the API endpoint is reachable and responsive."""
+    try:
+        s = make_session(retries=1)
+        # Send a simple HEAD request to test connectivity
+        url = f"{API_BASE_URL}/chat-messages"
+        headers = {"Authorization": f"Bearer {API_KEY}"}
+        response = s.head(url, headers=headers, timeout=5)
+        print("✓ API endpoint is reachable")
+        return True
+    except Exception as e:
+        print(f"✗ API connectivity test failed: {e}")
+        print(f"  URL: {API_BASE_URL}")
+        return False
 
 
 def make_session(retries=RETRIES, verify=True) -> requests.Session:
@@ -219,7 +235,11 @@ def run_parallel_suite(questions, user_prefix: str, out_path: str, max_workers: 
 
 
 if __name__ == "__main__":
-    records = load_json("master_multitagged.json")
+    if not test_api_connection():
+        print("Cannot connect to API. Exiting...")
+        exit(1)
+        
+    records = load_json("input_questions/master_multitagged.json")
     questions_objective, questions_subjective = split_objective_subjective(records)
 
     print("=== Parallel Dify API Test (objective) ===")
