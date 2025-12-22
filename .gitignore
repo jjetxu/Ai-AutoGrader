@@ -8,3 +8,4 @@
 .venv
 
 saved_results/
+__pycache__/

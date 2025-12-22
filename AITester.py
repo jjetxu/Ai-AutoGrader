@@ -19,8 +19,8 @@ TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", 60))   # Request timeout in seconds
 RETRIES = int(os.getenv("MAX_RETRIES", 2))          # Maximum number of retry attempts (default: 2)
 
 # ---- Threading & Output Configuration ----
-MAX_WORKERS = 1                                      # Maximum number of parallel worker threads
-SAVE_EVERY = 1                                       # Save results after every N completed requests
+MAX_WORKERS = 4                                      # Maximum number of parallel worker threads
+SAVE_EVERY = 11                                       # Save results after every N completed requests
 OUT_COMBINED = "saved_results/dify_results_combined.json"   # Output file for combined test results
 
 
@@ -178,16 +178,32 @@ def worker(i: int, qobj: dict, user_prefix: str) -> dict:
     q = qobj["question"]
     user = f"{user_prefix}-{i:03d}"
     try:
-        return {"id": qobj.get("id"), "question": q, "result": dify_chat(q, user=user)}
+        return {"id": qobj.get("id"), "question": q, "expected_answer": qobj.get("reference_answer", ""), "result": dify_chat(q, user=user)}
     except requests.exceptions.RequestException as e:
         msg = str(e)
         if "NameResolutionError" in msg or "getaddrinfo failed" in msg:
             time.sleep(2)
             try:
-                return {"id": qobj.get("id"), "question": q, "result": dify_chat(q, user=user)}
+                return {"id": qobj.get("id"), "question": q, "expected_answer": qobj.get("reference_answer", ""), "result": dify_chat(q, user=user)}
             except requests.exceptions.RequestException as e2:
-                return {"id": qobj.get("id"), "question": q, "result": {"success": False, "error": str(e2)}}
-        return {"id": qobj.get("id"), "question": q, "result": {"success": False, "error": msg}}
+                return {"id": qobj.get("id"), "question": q, "expected_answer": qobj.get("reference_answer", ""), "result": {"success": False, "error": str(e2)}}
+        return {"id": qobj.get("id"), "question": q, "expected_answer": qobj.get("reference_answer", ""), "result": {"success": False, "error": msg}}
+
+
+def filter_results(input_path, output_path):
+    """
+    Filters results to include only successful entries.
+    
+    Args:
+        input_path (str): Path to the input results JSON file
+        output_path (str): Path to save the filtered results
+    """
+    results = load_json(input_path)
+    successful_results = [result for result in results if result["result"].get("success", False)]
+    save_json(output_path, successful_results)
+    print(f"Filtered {len(results)} results to {len(successful_results)} successful ones")
+    print(f"Saved to {output_path}")
+    return successful_results
 
 
 def run_parallel_suite(questions, user_prefix: str, out_path: str, max_workers: int = MAX_WORKERS):
@@ -243,10 +259,17 @@ if __name__ == "__main__":
     records = load_json("input_questions/master_multitagged.json")
 
     # run tests for agent response
-    # query all questions
+    # # query all questions
     print("=== Parallel Dify Querying ===")
-    run_parallel_suite(records, "auto", OUT_COMBINED, MAX_WORKERS)
+    results = run_parallel_suite(records, "auto", OUT_COMBINED, MAX_WORKERS)
 
-    # compare results with expected answers
-    print("\n=== Parallel Grading ===")
-    
+    # filter successful results and save to a separate file
+    print("\n=== Filtering Results ===")
+    successful_results = [result for result in results if result["result"].get("success", False)]
+    filtered_out_path = "saved_results/dify_results_successful.json"
+    save_json(filtered_out_path, successful_results)
+    print(f"Saved {len(successful_results)} successful results to {filtered_out_path}")
+    print(f"Original file {OUT_COMBINED} contains all {len(results)} results")
+
+    # compare results with expected answers, run suite again
+    # print("\n=== Parallel Grading ===")
