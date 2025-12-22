@@ -29,10 +29,10 @@ SAVE_EVERY = 11                                       # Save results after every
 OUT_COMBINED = "saved_results/dify_results_combined.json"   # Output file for combined test results
 
 # ---- Grading Configuration ----
-GRADER_SYSTEM_PROMPT = "You are an expert evaluator tasked with assessing the quality of AI-generated answers based on their relevance, accuracy, and completeness compared to a reference answer."
+GRADER_SYSTEM_PROMPT = "你作为一个语义分析大师，具有较强的语义理解能力，请帮我分析针对一个问题我的答案和参考答案之间的相似性，并给出评分"
 
 GRADER_USER_PROMPT_TEMPLATE = """
-Please evaluate the following AI-generated answer against the reference answer for the given question.
+针对一个问题，我提供了参考答案和我的回答，请评判我的回答是否合适、是否准确，给出一个评分1-5分，
 
 **Question:**
 {question}
@@ -44,10 +44,11 @@ Please evaluate the following AI-generated answer against the reference answer f
 {agent_answer}
 
 **Evaluation Criteria:**
-- Assign a score from 0 to 10 (0 = completely wrong, 10 = perfect match)
-- Focus on factual accuracy, relevance, and completeness
-- Consider whether the AI answer addresses all key points from the reference
-- Be lenient on wording differences if the meaning is the same
+5分表示回答和参考答案非常切合，和参考答案相同的意思；
+5分表示回答和参考答案很契合，能够表达的基本相同的含义；
+3分表示回答和参考答案相近，有较大的词语相似；
+2分表示回答和参考答案差异较大，只有很少的部分或者词语相似；
+1分表示回答和参考答案不具有相近性；
 
 **Your response must be in the following JSON format:**
 {{"score": YOUR_SCORE, "rationale": "YOUR_EXPLANATION"}}
@@ -232,7 +233,6 @@ def filter_results(input_path, output_path):
     successful_results = [result for result in results if result["result"].get("success", False)]
     save_json(output_path, successful_results)
     print(f"Filtered {len(results)} results to {len(successful_results)} successful ones")
-    print(f"Saved to {output_path}")
     return successful_results
 
 
@@ -274,7 +274,6 @@ def run_parallel_suite(questions, user_prefix: str, out_path: str, max_workers: 
             print("\nKeyboardInterrupt — saving partial results and stopping...")
         finally:
             save_json(out_path, results)
-            print(f"Saved {len(results)} results to {out_path}")
 
     return results
 
@@ -352,7 +351,7 @@ def parse_grade_response(raw_response):
         
         # Validate score
         score = int(grade.get("score", 0))
-        score = max(0, min(10, score))  # Ensure score is between 0-10
+        score = max(0, min(5, score))  # Ensure score is between 0-5
         
         return {
             "score": score,
@@ -452,7 +451,7 @@ def run_parallel_grading(successful_results, out_path, max_workers=MAX_WORKERS):
                 
                 score = grade_rec["score"]
                 q = grade_rec["question"]
-                print(f"✓ [{n}/{len(successful_results)}] Score: {score}/10 - {q}")
+                print(f"✓ [{n}/{len(successful_results)}] Score: {score}/5 - {q}")
                 
                 if n % SAVE_EVERY == 0:
                     save_json(out_path, grading_results)
@@ -461,7 +460,6 @@ def run_parallel_grading(successful_results, out_path, max_workers=MAX_WORKERS):
             print("\nKeyboardInterrupt — saving partial grading results and stopping...")
         finally:
             save_json(out_path, grading_results)
-            print(f"Saved {len(grading_results)} grading results to {out_path}")
     
     return grading_results
 
@@ -505,9 +503,6 @@ if __name__ == "__main__":
             print(f"✓ Loaded {len(successful_results)} successful results from existing file")
         except FileNotFoundError:
             print("ERROR: Could not find 'saved_results/dify_results_successful.json'")
-            print("Please either:")
-            print("1. Uncomment the querying section to generate results")
-            print("2. Ensure the successful results file exists")
             exit(1)
     
     # compare results with expected answers using DeepSeek grading
@@ -524,6 +519,4 @@ if __name__ == "__main__":
         average_score = total_score / len(grading_results)
         print(f"\n=== Grading Summary ===")
         print(f"Total Questions Graded: {len(grading_results)}")
-        print(f"Average Score: {average_score:.2f}/10")
-        print(f"Total Score: {total_score}/{len(grading_results)*10}")
-        print(f"Grading results saved to: saved_results/dify_grading_results.json")
+        print(f"Average Score: {average_score:.2f}/5")
