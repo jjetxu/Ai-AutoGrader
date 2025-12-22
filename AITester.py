@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 load_dotenv()
 
 # CONFIG
-# ---- API ----
+# ---- Dify API ----
 API_KEY = os.getenv("API_KEY")
 API_BASE_URL = os.getenv("API_BASE_URL")
 TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", 60))   # Request timeout in seconds (default: 60)
@@ -21,8 +21,7 @@ RETRIES = int(os.getenv("MAX_RETRIES", 2))          # Maximum number of retry at
 # ---- Threading & Output Configuration ----
 MAX_WORKERS = 1                                      # Maximum number of parallel worker threads
 SAVE_EVERY = 1                                       # Save results after every N completed requests
-OUT_OBJECTIVE = "saved_results/dify_results_objective.json"   # Output file for objective test results
-OUT_SUBJECTIVE = "saved_results/dify_results_subjective.json" # Output file for subjective test results
+OUT_COMBINED = "saved_results/dify_results_combined.json"   # Output file for combined test results
 
 
 def save_json(path: str, data) -> None:
@@ -235,15 +234,19 @@ def run_parallel_suite(questions, user_prefix: str, out_path: str, max_workers: 
 
 
 if __name__ == "__main__":
+    # ensure API can connect before running tests
     if not test_api_connection():
         print("Cannot connect to API. Exiting...")
         exit(1)
         
+    # load test questions from JSON file
     records = load_json("input_questions/master_multitagged.json")
-    questions_objective, questions_subjective = split_objective_subjective(records)
 
-    print("=== Parallel Dify API Test (objective) ===")
-    run_parallel_suite(questions_objective, "objective", OUT_OBJECTIVE, MAX_WORKERS)
+    # run tests for agent response
+    # query all questions
+    print("=== Parallel Dify Querying ===")
+    run_parallel_suite(records, "auto", OUT_COMBINED, MAX_WORKERS)
 
-    print("\n=== Parallel Dify API Test (subjective) ===")
-    run_parallel_suite(questions_subjective, "subjective", OUT_SUBJECTIVE, MAX_WORKERS)
+    # compare results with expected answers
+    print("\n=== Parallel Grading ===")
+    
