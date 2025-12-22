@@ -3,6 +3,7 @@ import json
 import time
 import requests
 import threading
+import re
 from dotenv import load_dotenv
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -18,10 +19,40 @@ API_BASE_URL = os.getenv("API_BASE_URL")
 TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", 60))   # Request timeout in seconds (default: 60)
 RETRIES = int(os.getenv("MAX_RETRIES", 2))          # Maximum number of retry attempts (default: 2)
 
+# ---- DeepSeek API (for grading) ----
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1/chat/completions"
+
 # ---- Threading & Output Configuration ----
 MAX_WORKERS = 4                                      # Maximum number of parallel worker threads
 SAVE_EVERY = 11                                       # Save results after every N completed requests
 OUT_COMBINED = "saved_results/dify_results_combined.json"   # Output file for combined test results
+
+# ---- Grading Configuration ----
+GRADER_SYSTEM_PROMPT = "你作为一个语义分析大师，具有较强的语义理解能力，请帮我分析针对一个问题我的答案和参考答案之间的相似性，并给出评分"
+
+GRADER_USER_PROMPT_TEMPLATE = """
+针对一个问题，我提供了参考答案和我的回答，请评判我的回答是否合适、是否准确，给出一个评分1-5分，
+
+**Question:**
+{question}
+
+**Reference Answer:**
+{expected_answer}
+
+**AI-Generated Answer:**
+{agent_answer}
+
+**Evaluation Criteria:**
+5分表示回答和参考答案非常切合，和参考答案相同的意思；
+5分表示回答和参考答案很契合，能够表达的基本相同的含义；
+3分表示回答和参考答案相近，有较大的词语相似；
+2分表示回答和参考答案差异较大，只有很少的部分或者词语相似；
+1分表示回答和参考答案不具有相近性；
+
+**Your response must be in the following JSON format:**
+{{"score": YOUR_SCORE, "rationale": "YOUR_EXPLANATION"}}
+"""
 
 
 def save_json(path: str, data) -> None:
@@ -202,7 +233,6 @@ def filter_results(input_path, output_path):
     successful_results = [result for result in results if result["result"].get("success", False)]
     save_json(output_path, successful_results)
     print(f"Filtered {len(results)} results to {len(successful_results)} successful ones")
-    print(f"Saved to {output_path}")
     return successful_results
 
 
@@ -244,32 +274,249 @@ def run_parallel_suite(questions, user_prefix: str, out_path: str, max_workers: 
             print("\nKeyboardInterrupt — saving partial results and stopping...")
         finally:
             save_json(out_path, results)
-            print(f"Saved {len(results)} results to {out_path}")
 
     return results
 
 
-if __name__ == "__main__":
-    # ensure API can connect before running tests
-    if not test_api_connection():
-        print("Cannot connect to API. Exiting...")
-        exit(1)
+# ========== GRADING FUNCTIONS ==========
+
+def api_post(base_url, endpoint, headers, payload) -> dict:
+    """
+    Generic API POST helper to reduce duplication between Dify/DeepSeek calls.
+    
+    Args:
+        base_url (str): Base URL of the API
+        endpoint (str): API endpoint path
+        headers (dict): Request headers
+        payload (dict): Request payload
         
-    # load test questions from JSON file
-    records = load_json("input_questions/master_multitagged.json")
+    Returns:
+        dict: API response data
+        
+    Raises:
+        requests.exceptions.RequestException: If the API request fails
+    """
+    s = get_session()
+    url = f"{base_url}{endpoint}"
+    r = s.post(url, json=payload, headers=headers, timeout=TIMEOUT)
+    r.raise_for_status()
+    return r.json()
 
-    # run tests for agent response
-    # # query all questions
-    print("=== Parallel Dify Querying ===")
-    results = run_parallel_suite(records, "auto", OUT_COMBINED, MAX_WORKERS)
 
-    # filter successful results and save to a separate file
-    print("\n=== Filtering Results ===")
-    successful_results = [result for result in results if result["result"].get("success", False)]
-    filtered_out_path = "saved_results/dify_results_successful.json"
-    save_json(filtered_out_path, successful_results)
-    print(f"Saved {len(successful_results)} successful results to {filtered_out_path}")
-    print(f"Original file {OUT_COMBINED} contains all {len(results)} results")
+def deepseek_chat(messages) -> str:
+    """
+    Sends a chat request to DeepSeek API and returns the assistant's response.
+    
+    Args:
+        messages (list): List of chat messages in OpenAI format
+        
+    Returns:
+        str: The assistant's response content
+        
+    Raises:
+        requests.exceptions.RequestException: If the API request fails
+    """
+    headers = {
+        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": "deepseek-chat",
+        "messages": messages,
+        "temperature": 0.2,
+        "max_tokens": 1000
+    }
+    response = api_post(DEEPSEEK_BASE_URL, "", headers, payload)
+    return response["choices"][0]["message"]["content"].strip()
 
-    # compare results with expected answers, run suite again
-    # print("\n=== Parallel Grading ===")
+
+def parse_grade_response(raw_response):
+    """
+    Parses and validates JSON response from DeepSeek grader.
+    
+    Args:
+        raw_response (str): Raw API response containing JSON
+        
+    Returns:
+        dict: Parsed grade with score, rationale, and optional error
+    """
+    try:
+        # Extract JSON from response using regex
+        match = re.search(r"\{.*\}", raw_response, re.S)
+        if not match:
+            return {"score": 0, "rationale": "", "error": f"Non-JSON output: {raw_response[:200]}"}
+        
+        # Parse JSON
+        grade = json.loads(match.group(0))
+        
+        # Validate score
+        score = int(grade.get("score", 0))
+        score = max(0, min(5, score))  # Ensure score is between 0-5
+        
+        return {
+            "score": score,
+            "rationale": grade.get("rationale", "").strip(),
+            "error": None
+        }
+    except Exception as e:
+        return {"score": 0, "rationale": "", "error": str(e)}
+
+
+def compare_expected_response(record):
+    """
+    Compares AI-generated answer with expected answer using DeepSeek grading.
+    
+    Args:
+        record (dict): Test record containing question, expected answer, and AI response
+        
+    Returns:
+        dict: Grading result with question, score, rationale, and original data
+    """
+    question = record["question"]
+    expected_answer = record["expected_answer"]
+    agent_answer = record["result"]["answer"]
+    
+    # Prepare messages for DeepSeek grader
+    messages = [
+        {"role": "system", "content": GRADER_SYSTEM_PROMPT},
+        {"role": "user", "content": GRADER_USER_PROMPT_TEMPLATE.format(
+            question=question,
+            expected_answer=expected_answer,
+            agent_answer=agent_answer
+        )}
+    ]
+    
+    try:
+        # Get grading response
+        raw_grade = deepseek_chat(messages)
+        
+        # Parse and validate grading
+        grade = parse_grade_response(raw_grade)
+        
+        return {
+            "id": record.get("id"),
+            "question": question,
+            "expected_answer": expected_answer,
+            "agent_answer": agent_answer,
+            "score": grade["score"],
+            "rationale": grade["rationale"],
+            "error": grade["error"]
+        }
+    except Exception as e:
+        return {
+            "id": record.get("id"),
+            "question": question,
+            "expected_answer": expected_answer,
+            "agent_answer": agent_answer,
+            "score": 0,
+            "rationale": "",
+            "error": str(e)
+        }
+
+
+def grading_worker(record):
+    """
+    Worker function for processing individual grading tasks.
+    
+    Args:
+        record (dict): Test record to grade
+        
+    Returns:
+        dict: Grading result
+    """
+    return compare_expected_response(record)
+
+
+def run_parallel_grading(successful_results, out_path, max_workers=MAX_WORKERS):
+    """
+    Runs parallel grading on successful results using ThreadPoolExecutor.
+    
+    Args:
+        successful_results (list): List of successful test results to grade
+        out_path (str): Path to save grading results
+        max_workers (int): Maximum number of parallel worker threads
+        
+    Returns:
+        list: Grading results
+    """
+    grading_results = []
+    
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futures = [ex.submit(grading_worker, record) for record in successful_results]
+        
+        try:
+            for n, fut in enumerate(as_completed(futures), start=1):
+                grade_rec = fut.result()
+                grading_results.append(grade_rec)
+                
+                score = grade_rec["score"]
+                q = grade_rec["question"]
+                print(f"✓ [{n}/{len(successful_results)}] Score: {score}/5 - {q}")
+                
+                if n % SAVE_EVERY == 0:
+                    save_json(out_path, grading_results)
+        
+        except KeyboardInterrupt:
+            print("\nKeyboardInterrupt — saving partial grading results and stopping...")
+        finally:
+            save_json(out_path, grading_results)
+    
+    return grading_results
+
+
+if __name__ == "__main__":
+    # ========== QUERYING SECTION ==========
+    # You can comment out this entire section to skip querying and load existing results
+    successful_results = None
+    
+    try:
+        # ensure API can connect before running tests
+        if not test_api_connection():
+            print("Cannot connect to API. Exiting...")
+            exit(1)
+            
+        # load test questions from JSON file
+        records = load_json("input_questions/master_multitagged.json")
+
+        # run tests for agent response
+        print("=== Parallel Dify Querying ===")
+        results = run_parallel_suite(records, "auto", OUT_COMBINED, MAX_WORKERS)
+
+        # filter successful results and save to a separate file
+        print("\n=== Filtering Results ===")
+        successful_results = [result for result in results if result["result"].get("success", False)]
+        filtered_out_path = "saved_results/dify_results_successful.json"
+        save_json(filtered_out_path, successful_results)
+        print(f"Saved {len(successful_results)} successful results to {filtered_out_path}")
+        print(f"Original file {OUT_COMBINED} contains all {len(results)} results")
+    except Exception as e:
+        print(f"Querying failed with error: {e}")
+        print("Falling back to loading existing successful results...")
+        successful_results = None
+    
+    # ========== GRADING SECTION ==========
+    # Load successful results if not obtained from querying
+    if successful_results is None:
+        print("\n=== Loading Existing Results ===")
+        try:
+            successful_results = load_json("saved_results/dify_results_successful.json")
+            print(f"✓ Loaded {len(successful_results)} successful results from existing file")
+        except FileNotFoundError:
+            print("ERROR: Could not find 'saved_results/dify_results_successful.json'")
+            exit(1)
+    
+    # compare results with expected answers using DeepSeek grading
+    print("\n=== Parallel Grading ===")
+    grading_results = run_parallel_grading(
+        successful_results,
+        "saved_results/dify_grading_results.json",
+        MAX_WORKERS
+    )
+
+    # Calculate and display overall statistics
+    if grading_results:
+        total_score = sum(r["score"] for r in grading_results)
+        average_score = total_score / len(grading_results)
+        print(f"\n=== Grading Summary ===")
+        print(f"Total Questions Graded: {len(grading_results)}")
+        print(f"Average Score: {average_score:.2f}/5")
