@@ -10,14 +10,14 @@ def main():
 
     # Querying section
     try:
-        # if not test_api_connection():
-        #     print("Cannot connect to API. Exiting...")
-        #     return
+        if not test_api_connection():
+            print("Cannot connect to API. Exiting...")
+            return
 
-        # records = load_json("input_questions/master_multitagged.json")
-        # print("=== Parallel Dify Querying ===")
-        # results = run_parallel_suite(records, "auto", OUT_COMBINED, MAX_WORKERS)
-        results = load_json(OUT_COMBINED)
+        records = load_json("input_questions/master_multitagged.json")
+        print("=== Parallel Dify Querying ===")
+        results = run_parallel_suite(records, "auto", OUT_COMBINED, MAX_WORKERS)
+        # results = load_json(OUT_COMBINED)
         print("\n=== Filtering Results ===")
         successful_results = filter(results, "success", "==", True)
         save_json(OUT_SUCCESSFUL, successful_results)

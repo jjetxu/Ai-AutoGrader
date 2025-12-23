@@ -43,18 +43,21 @@ def test_api_connection() -> bool:
 def dify_chat(query: str, user: str, inputs=None) -> dict:
     s = get_session()
     url = f"{API_BASE_URL}/chat-messages"
-    headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": f"Bearer {API_KEY}",
+        "Content-Type": "application/json",
+        "Connection": "close",   # IMPORTANT for unstable tunnels
+    }
     payload = {"inputs": inputs or {}, "query": query, "response_mode": "blocking", "user": user}
 
     t0 = time.time()
     r = s.post(url, json=payload, headers=headers, timeout=TIMEOUT)
     dt = time.time() - t0
-    r.raise_for_status()
+
+    if r.status_code >= 400:
+        # <-- This tells you the real reason
+        raise requests.HTTPError(f"{r.status_code} {r.reason} | body={r.text[:1000]}", response=r)
 
     data = r.json()
-    return {
-        "success": True,
-        "time": dt,
-        "answer": data.get("answer"),
-        "conversation_id": data.get("conversation_id"),
-    }
+    return {"success": True, "time": dt, "answer": data.get("answer"), "conversation_id": data.get("conversation_id")}
+
