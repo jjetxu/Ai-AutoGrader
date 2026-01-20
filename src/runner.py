@@ -3,7 +3,7 @@ import time
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from src.config import MAX_WORKERS, SAVE_EVERY
+from src.config import MAX_WORKERS, SAVE_EVERY, REQUEST_DELAY
 from src.io_utils import save_json
 from src.dify_client import dify_chat
 
@@ -18,6 +18,7 @@ def worker(i: int, qobj: dict, user_prefix: str) -> dict:
 
     try:
         res = dify_chat(q, user=user)
+        time.sleep(REQUEST_DELAY)
         return {"id": qobj.get("id"), "question": q, "expected_answer": expected, "result": res}
     except requests.exceptions.RequestException as e:
         msg = str(e)
@@ -25,9 +26,12 @@ def worker(i: int, qobj: dict, user_prefix: str) -> dict:
             time.sleep(2)
             try:
                 res = dify_chat(q, user=user)
+                time.sleep(REQUEST_DELAY)
                 return {"id": qobj.get("id"), "question": q, "expected_answer": expected, "result": res}
             except requests.exceptions.RequestException as e2:
+                time.sleep(REQUEST_DELAY)
                 return fail(str(e2))
+        time.sleep(REQUEST_DELAY)
         return fail(msg)
 
 def run_parallel_suite(questions: list, user_prefix: str, out_path: str, max_workers: int = MAX_WORKERS) -> list:

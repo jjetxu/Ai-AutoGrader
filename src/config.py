@@ -15,8 +15,9 @@ DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1/chat/completions"
 
 # ---- Threading & Output ----
-MAX_WORKERS = int(os.getenv("MAX_WORKERS", 4))
+MAX_WORKERS = int(os.getenv("MAX_WORKERS", 1))
 SAVE_EVERY = int(os.getenv("SAVE_EVERY", 11))
+REQUEST_DELAY = float(os.getenv("REQUEST_DELAY", 0.5))
 OUT_COMBINED = os.getenv("OUT_COMBINED", "saved_results/dify_results_combined.json")
 OUT_SUCCESSFUL = os.getenv("OUT_SUCCESSFUL", "saved_results/dify_results_successful.json")
 OUT_GRADES = os.getenv("OUT_GRADES", "saved_results/dify_grading_results.json")
