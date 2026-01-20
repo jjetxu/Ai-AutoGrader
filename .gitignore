@@ -7,5 +7,7 @@
 # ignore Python virtual environment
 .venv
 
+*.json
+
 saved_results/
 __pycache__/
